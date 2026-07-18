@@ -275,13 +275,29 @@ async function run(captureId: string): Promise<void> {
     const aliases = (await db.from("project_aliases").select("project_id, normalised_alias")).data ?? [];
 
     let selected: { id: string; method: string; confidence: number } | null = null;
+    let aliasHit = false;
 
-    // Stage A: explicit reference
+    // Stage A: explicit reference — also scan title/summary/entities, since the
+    // structurer sometimes under-extracts phrases like "this is for TPM".
     const ref = intake.explicitProjectReference as { normalised?: string } | null;
+    const scanText = normalise(
+      [ref?.normalised ?? "", intake.title, intake.conciseSummary,
+       ...(intake.entities as { name: string }[]).map((e) => e.name)].join(" "),
+    );
     if (ref?.normalised) {
       const n = normalise(ref.normalised);
       const hits = new Set(aliases.filter((a) => a.normalised_alias === n).map((a) => a.project_id));
-      if (hits.size === 1) selected = { id: [...hits][0], method: "explicit_alias", confidence: 0.99 };
+      if (hits.size === 1) {
+        selected = { id: [...hits][0], method: "explicit_alias", confidence: 0.99 };
+        aliasHit = true;
+      }
+    }
+    if (!selected) {
+      const hits = new Set(aliases.filter((a) => scanText.includes(` ${a.normalised_alias} `) || scanText.startsWith(`${a.normalised_alias} `) || scanText.endsWith(` ${a.normalised_alias}`) || scanText === a.normalised_alias).map((a) => a.project_id));
+      if (hits.size === 1) {
+        selected = { id: [...hits][0], method: "explicit_alias", confidence: 0.95 };
+        aliasHit = true;
+      }
     }
 
     // Stage D: adjudication
@@ -300,7 +316,10 @@ async function run(captureId: string): Promise<void> {
 
       const proj = projects.find((p) => p.id === adj.selectedProjectId);
       const margin = adj.confidence - (adj.alternatives[0]?.confidence ?? 0);
-      if (proj && !adj.requiresClarification && adj.confidence >= proj.routing_threshold && margin >= proj.ambiguity_margin) {
+      // A named-but-unregistered project must ASK, not confidently fall into
+      // the catch-all (spec §22.3: false confident routing is the worse error).
+      const unknownNameToCatchAll = !aliasHit && !!ref?.normalised && proj?.slug === "general-inbox";
+      if (proj && !adj.requiresClarification && !unknownNameToCatchAll && adj.confidence >= proj.routing_threshold && margin >= proj.ambiguity_margin) {
         selected = { id: proj.id, method: "semantic_adjudication", confidence: adj.confidence };
       }
     }
