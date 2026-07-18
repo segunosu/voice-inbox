@@ -122,6 +122,17 @@ async function processAudioMessage(event: Record<string, unknown>): Promise<void
       "🎙️ Got it — capture stored. Processing…",
     ).catch((e) => console.error("ack reply failed", e));
   }
+
+  // hand off to the pipeline immediately (outbox remains the retry backstop)
+  const captureId = rpc.data as string;
+  const pipelineSecret = Deno.env.get("PIPELINE_SECRET") ?? "";
+  if (pipelineSecret) {
+    await fetch(`${SUPABASE_URL}/functions/v1/process-capture`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-pipeline-secret": pipelineSecret },
+      body: JSON.stringify({ captureId }),
+    }).catch((e) => console.error("pipeline handoff failed", e));
+  }
 }
 
 Deno.serve(async (req) => {

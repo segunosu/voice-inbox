@@ -4,6 +4,10 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 ---
 
+## 2026-07-18 (night) — Pipeline live: transcribe → structure → route verified on real captures
+
+14. **process-capture + slack-interact deployed; ingest hands off directly.** OpenAI transcription (`gpt-4o-mini-transcribe`) + structuring/adjudication (`gpt-5-mini`, §16 prompts, strict JSON schemas); routing = §11 Stage A explicit-alias + LLM adjudication with per-project thresholds (embeddings staged for later — registry is 4 projects, alias+LLM is sufficient and cheaper at this scale); ambiguous → Slack buttons via clarifications table; pipeline functions authed by shared secret; registry seeded (Voice Inbox / TPM / AI Alpha OS / General Inbox + 11 aliases). Verified live on both real captures: #1 "Project Voice Inbox. This is my first clip." → **explicit_alias 0.99 → Voice Inbox**; #2 "This is for TPM…" → **semantic_adjudication 0.92 → The Player's Mind**; routed replies posted in both Slack threads (channel + DM). Calibration note for the eval set: capture #2 said "for TPM" yet went to adjudication, not Stage A — structurer under-extracts explicit references; add to labelled examples. **DONE**
+
 ## 2026-07-18 (evening) — Phase 0 exit gate met; ingest deployed
 
 12. **Phase 0 exit conditions all verified**: contracts typecheck + 15 tests green (fake capture traverses the simulated state machine); migrations 0001+0002 applied to the live project (14 tables, RLS on all, capture RPC with transactional outbox, private audio bucket); Gherkin specs for all 17 §26 criteria committed before build; **CI green on GitHub Actions**. **DONE**
