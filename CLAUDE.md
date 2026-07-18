@@ -14,18 +14,16 @@ Voice Inbox: spoken capture → transcription → structured intake → project 
 6. **Verify by driving the real system** before claiming a phase exit condition is met; record evidence.
 7. After pushing, **confirm the push landed** (`git log origin/main -1` matches HEAD) before reporting it as done.
 
-## Layout (monorepo, §24 of spec)
+## Layout (monorepo, §24 of spec, amended by ADR-0003)
 
-- `apps/android` — Kotlin/Compose capture client (Gradle, independent of pnpm workspace)
-- `apps/api` — TypeScript backend (Fastify), Supabase-hosted Postgres/storage
+- `packages/*` — contracts (Zod), routing, markdown-renderer, policy, observability
+- `supabase/` — migrations + Edge Functions: slack-ingest, structure, route, dispatch-github, clarifications (replaces the spec's n8n `automation/` folder; see ADR-0001)
+- `slack/` — Slack app manifest for the thin Voice Inbox app
 - `apps/admin-web` — admin dashboard (later phase)
-- `services/runner` — Windows agent runner invoking Claude Code headless
-- `services/outbox-dispatcher` — outbox → Edge Function dispatch
-- `packages/*` — contracts (Zod), database, markdown-renderer, routing, policy, observability
-- `supabase/` — migrations, Edge Functions (replaces the spec's n8n `automation/` folder; see ADR-0001)
 - `evals/` — routing/structuring/security eval sets and harnesses
-- `tests/` — contract, integration, end-to-end
+- `tests/` — contract, integration, end-to-end, Gherkin acceptance specs
+- (Plan B only, not in v1: `apps/android`, `services/runner` — see ADR-0003)
 
 ## Stack decisions already made
 
-TypeScript + Fastify + Zod + Drizzle; Supabase (Postgres 17, storage, auth, Edge Functions, pg_cron, pgvector, built-in gte-small embeddings); OpenAI transcription; Claude API for structuring/routing; FCM notifications; no n8n.
+TypeScript + Zod; Supabase (Postgres 17, storage, Edge Functions, pg_cron, pgvector, built-in gte-small embeddings); Slack audio-clip capture + interactive-button clarifications; OpenAI transcription; Claude for structuring/routing; Claude Code GitHub Action (`@claude` issues) for execution; no n8n, no native app in v1.

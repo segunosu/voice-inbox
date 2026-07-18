@@ -17,9 +17,10 @@ Voice Inbox captures a spoken note, meeting reflection, requirement, bug report,
 ## Architecture at a glance
 
 - **Backend**: Supabase (PostgreSQL + object storage + auth + Edge Functions). There is **no n8n** — orchestration is Edge Functions + a transactional outbox + pg_cron (see ADR-0001).
-- **Capture client**: native Android (Kotlin / Jetpack Compose), sideloaded signed APK, Samsung S24 first device.
+- **Capture**: Slack audio clips in `#voice-inbox` (or DM to the Voice Inbox Slack app) → Events API → Edge Function, which archives audio to the private bucket (see ADR-0003; native Android app is Plan B).
 - **AI**: OpenAI transcription; Claude (Anthropic) for structuring and routing adjudication; Supabase built-in gte-small + pgvector for embeddings.
-- **Agent runner**: always-on Windows machine invoking Claude Code headless in isolated git worktrees under a strict policy wrapper.
+- **Execution**: Claude Code GitHub Action — routing produces a GitHub issue carrying the intake markdown with an `@claude` mention; the Action implements on an isolated branch and opens a PR. Never merges automatically.
+- **Clarifications & notifications**: Slack interactive buttons and thread replies.
 
 ## Delivery method
 

@@ -4,6 +4,12 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 ---
 
+## 2026-07-18 (later) — Buy-over-build pivot
+
+10. **Slack capture replaces the native Android app; Claude Code GitHub Action replaces the local runner.** Owner research + verification showed the capture and execution halves are commoditised; constraint added: no new paid subscriptions. Chosen: thin dedicated Slack app (audio clips → Events API → Supabase Edge Functions) for capture/clarifications/notifications; `@claude` GitHub issues for execution. Voicenotes (paid tier), Telegram (second app), official Claude Tag (no audio, no event triggers, Team/Enterprise-only) and the owner's homegrown Slack bot (conversational shape, Socket Mode) all evaluated and set aside. Native app + local runner remain Plan B. → ADR-0003. **CONFIRMED**
+
+11. **Secrets migration executed.** All 23 `.env*` files on the Drive-synced workspace moved to `C:\Users\Oem\.secrets\drive-migration\` with pointer stubs left behind; Drive tree verified clean of live token patterns. Outstanding: owner must rotate 4 exposed GitHub PATs + old Firecrawl key; a 5th PAT found embedded in the `teamsmiths-ai-deputees` git remote URL (now stripped from `.git/config`) also needs rotation. **DONE (rotation pending, owner action)**
+
 ## 2026-07-18 — Project inception decisions (owner interview)
 
 1. **No n8n.** All orchestration (§15 workflows in the spec) is implemented as Supabase Edge Functions driven by a transactional outbox + pg_cron dispatcher. Reasoning: owner already subscribes to Supabase; n8n would add a second host, second credential store and second failure domain for a system whose spec already mandates Postgres-as-truth with an outbox; workflow logic in TypeScript in git beats exported workflow JSON. → ADR-0001. **CONFIRMED**
