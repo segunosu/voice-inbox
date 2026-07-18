@@ -4,6 +4,14 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 ---
 
+## 2026-07-18 (evening) — Phase 0 exit gate met; ingest deployed
+
+12. **Phase 0 exit conditions all verified**: contracts typecheck + 15 tests green (fake capture traverses the simulated state machine); migrations 0001+0002 applied to the live project (14 tables, RLS on all, capture RPC with transactional outbox, private audio bucket); Gherkin specs for all 17 §26 criteria committed before build; **CI green on GitHub Actions**. **DONE**
+
+13. **slack-ingest Edge Function deployed** (`--no-verify-jwt`; Slack signs requests instead — signature verified with ±5min replay window, fail closed; url_verification handshake served pre-secret so the app can be created from the manifest). Verified live: handshake echoes, unsigned events → 401. `voice_inbox` schema exposed to PostgREST for supabase-js. **DONE**
+
+---
+
 ## 2026-07-18 (later) — Buy-over-build pivot
 
 10. **Slack capture replaces the native Android app; Claude Code GitHub Action replaces the local runner.** Owner research + verification showed the capture and execution halves are commoditised; constraint added: no new paid subscriptions. Chosen: thin dedicated Slack app (audio clips → Events API → Supabase Edge Functions) for capture/clarifications/notifications; `@claude` GitHub issues for execution. Voicenotes (paid tier), Telegram (second app), official Claude Tag (no audio, no event triggers, Team/Enterprise-only) and the owner's homegrown Slack bot (conversational shape, Socket Mode) all evaluated and set aside. Native app + local runner remain Plan B. → ADR-0003. **CONFIRMED**
