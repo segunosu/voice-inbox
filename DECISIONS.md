@@ -8,6 +8,8 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 12. **Phase 0 exit conditions all verified**: contracts typecheck + 15 tests green (fake capture traverses the simulated state machine); migrations 0001+0002 applied to the live project (14 tables, RLS on all, capture RPC with transactional outbox, private audio bucket); Gherkin specs for all 17 §26 criteria committed before build; **CI green on GitHub Actions**. **DONE**
 
+13a. **Voice Inbox Slack app created and installed** (2026-07-18, via browser automation with owner authorization): App ID `A0BJCB2PRHS`, TEAMSMITHS workspace, manifest scopes/events/URLs as per `slack/manifest.yaml` (Slack verified the events URL at creation). Signing secret + bot token stored in the local secrets store and set as Edge Function secrets via Management API. Channel `#voice-inbox` (`C0BJ8L1AXEW`) created; bot invited via `/invite`. Awaiting first live audio-clip capture test. **DONE**
+
 13. **slack-ingest Edge Function deployed** (`--no-verify-jwt`; Slack signs requests instead — signature verified with ±5min replay window, fail closed; url_verification handshake served pre-secret so the app can be created from the manifest). Verified live: handshake echoes, unsigned events → 401. `voice_inbox` schema exposed to PostgREST for supabase-js. **DONE**
 
 ---
