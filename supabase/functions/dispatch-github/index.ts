@@ -196,6 +196,28 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
     return;
   }
 
+  // Local working session (§17 reborn): folder projects in analyse_only/docs_auto
+  // get a headless Claude session on the always-on PC for work-shaped intents.
+  const WORK_INTENTS = new Set(["request_change", "create_document", "update_documentation", "create_tasks", "investigate"]);
+  const localCapable = !!proj.folder_path && !proj.repository_url && ["analyse_only", "docs_auto"].includes(proj.execution_mode);
+  if (WORK_INTENTS.has(intake.intent) && intake.executionPreference !== "store_only" && !forceStore && localCapable && !intake.sensitiveData.detected) {
+    const st0 = (await db.from("captures").select("status").eq("id", captureId).single()).data!.status;
+    if (st0 !== "routed") return;
+    await transition(db, captureId, "routed", "preparing_intake", correlationId);
+    await queueFolderExport();
+    await transition(db, captureId, "preparing_intake", "intake_ready", correlationId);
+    const job = await db.from("agent_jobs").insert({
+      capture_id: captureId, project_id: proj.id, status: "queued",
+      requested_mode: proj.execution_mode, intake_relative_path: `.voice-inbox/inbox`,
+      policy_snapshot_json: { kind: "local_session", execution_mode: proj.execution_mode, folder_path: proj.folder_path, intakeMd: md },
+    }).select("id").single();
+    if (job.error) throw job.error;
+    await transition(db, captureId, "intake_ready", "agent_queued", correlationId, { agentJobId: job.data.id, kind: "local_session" });
+    await postThreadReply(BOT_TOKEN, channel, threadTs,
+      `🧠 Queued a working session for *${proj.name}* — it runs on your machine within ~5 minutes; outputs will appear in the *${proj.folder_path}* folder and the report lands here.`);
+    return;
+  }
+
   const wantsExecution = !STORE_ONLY_INTENTS.has(intake.intent) && intake.executionPreference !== "store_only" && !forceStore;
   const canExecute = !!proj.repository_url && !["capture_only", "analyse_only", "disabled"].includes(proj.execution_mode) && !intake.sensitiveData.detected;
 
