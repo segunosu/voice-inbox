@@ -55,12 +55,47 @@ async function handleRouteChoice(
     body: JSON.stringify({ replace_original: true, text: `📁 Filed to *${proj.data.name}* — thanks, that's remembered as routing evidence.` }),
   });
 
-  // resume downstream processing
-  await fetch(`${SUPABASE_URL}/functions/v1/process-capture`, {
+  // resume downstream processing at the dispatch stage
+  await fetch(`${SUPABASE_URL}/functions/v1/dispatch-github`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
     body: JSON.stringify({ captureId }),
   }).catch((e) => console.error("resume failed", e));
+}
+
+async function handleApproval(
+  clarificationId: string,
+  captureId: string,
+  decision: "run" | "store",
+  slackUserId: string,
+  responseUrl: string,
+): Promise<void> {
+  const cl = await db
+    .from("clarifications")
+    .update({ status: "answered", responded_at: new Date().toISOString(), response_json: { decision, slackUserId } })
+    .eq("id", clarificationId)
+    .eq("status", "pending")
+    .select("id");
+  if (cl.error) throw cl.error;
+  if ((cl.data?.length ?? 0) === 0) return;
+
+  await db.from("audit_events").insert({
+    aggregate_type: "capture", aggregate_id: captureId,
+    event_type: "execution.approval", actor_type: "slack_user", actor_id: slackUserId,
+    correlation_id: crypto.randomUUID(), payload_json: { decision, clarificationId },
+  });
+
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ replace_original: true, text: decision === "run" ? "🚀 Approved — dispatching to Claude Code…" : "💾 Saved without execution." }),
+  });
+
+  await fetch(`${SUPABASE_URL}/functions/v1/dispatch-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
+    body: JSON.stringify({ captureId, approved: decision === "run", forceStore: decision === "store" }),
+  }).catch((e) => console.error("dispatch call failed", e));
 }
 
 Deno.serve(async (req) => {
@@ -81,6 +116,12 @@ Deno.serve(async (req) => {
       EdgeRuntime.waitUntil(
         handleRouteChoice(meta.clarificationId, meta.captureId, projectId, payload.user?.id ?? "unknown", payload.response_url)
           .catch((e) => console.error("interact failed", e)),
+      );
+    } else if (action?.action_id === "approve:run" || action?.action_id === "approve:store") {
+      const meta = JSON.parse(action.value ?? "{}");
+      EdgeRuntime.waitUntil(
+        handleApproval(meta.clarificationId, meta.captureId, action.action_id === "approve:run" ? "run" : "store", payload.user?.id ?? "unknown", payload.response_url)
+          .catch((e) => console.error("approval failed", e)),
       );
     }
   }

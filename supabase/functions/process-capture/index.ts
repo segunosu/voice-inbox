@@ -331,6 +331,12 @@ async function run(captureId: string): Promise<void> {
       await db.from("outbox_events").insert({ event_type: "capture.routed", aggregate_id: captureId, payload_json: { eventId: crypto.randomUUID(), eventType: "capture.routed", captureId, projectId: selected.id, confidence: selected.confidence, method: selected.method, correlationId } });
       await postThreadReply(BOT_TOKEN, channel, threadTs,
         `📁 *${intake.title}* → routed to *${proj.name}* (${selected.method === "explicit_alias" ? "you named it" : `confidence ${Math.round(selected.confidence * 100)}%`}).\n> ${intake.conciseSummary}`);
+      // hand off to the dispatch stage (policy gate + optional @claude issue)
+      await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/dispatch-github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
+        body: JSON.stringify({ captureId }),
+      }).catch((e) => console.error("dispatch handoff failed", e));
     } else {
       // ambiguous → one useful question with buttons (§5.2)
       await transition(db, captureId, "routing", "awaiting_route", correlationId);
