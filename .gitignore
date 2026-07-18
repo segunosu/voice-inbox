@@ -1,0 +1,33 @@
+# Secrets — never committed
+.env
+.env.*
+!.env.example
+*.pem
+*.keystore
+*.jks
+credentials*
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Android / Gradle
+apps/android/.gradle/
+apps/android/build/
+apps/android/**/build/
+apps/android/local.properties
+apps/android/captures/
+*.apk
+*.aab
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.log
