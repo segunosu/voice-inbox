@@ -63,6 +63,63 @@ async function handleRouteChoice(
   }).catch((e) => console.error("resume failed", e));
 }
 
+function normaliseAlias(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Voice project creation: the "Create 'X'" clarification button. */
+async function handleCreateProject(
+  clarificationId: string,
+  captureId: string,
+  name: string,
+  slackUserId: string,
+  responseUrl: string,
+): Promise<void> {
+  const correlationId = crypto.randomUUID();
+  const cl = await db
+    .from("clarifications")
+    .update({ status: "answered", responded_at: new Date().toISOString(), response_json: { optionId: "create", name, slackUserId } })
+    .eq("id", clarificationId)
+    .eq("status", "pending")
+    .select("capture_id");
+  if (cl.error) throw cl.error;
+  if ((cl.data?.length ?? 0) === 0) return;
+
+  const cap = await db.from("captures").select("user_id").eq("id", captureId).single();
+  if (cap.error) throw cap.error;
+  const intake = (await db.from("structured_intakes").select("summary").eq("capture_id", captureId).order("created_at", { ascending: false }).limit(1).single()).data;
+
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+  const proj = await db.from("projects").upsert({
+    user_id: cap.data.user_id, name, slug,
+    description: `Created by voice on ${new Date().toISOString().slice(0, 10)}. First capture: ${intake?.summary ?? name}`,
+    status: "active", execution_mode: "capture_only", folder_path: name,
+  }, { onConflict: "user_id,slug" }).select("id, name").single();
+  if (proj.error) throw proj.error;
+
+  await db.from("project_aliases").insert({ project_id: proj.data.id, alias: name, normalised_alias: normaliseAlias(name), alias_type: "name" });
+  await db.from("audit_events").insert({
+    aggregate_type: "project", aggregate_id: proj.data.id, event_type: "project.created_by_voice",
+    actor_type: "slack_user", actor_id: slackUserId, correlation_id: correlationId,
+    payload_json: { name, slug, fromCaptureId: captureId },
+  });
+
+  await db.from("captures").update({ selected_project_id: proj.data.id, route_confidence: 1, route_method: "user_clarification" }).eq("id", captureId);
+  await transition(db, captureId, "awaiting_route", "routed", correlationId, { projectId: proj.data.id, via: "create_project" });
+
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ replace_original: true, text: `🆕 Project *${proj.data.name}* created and this capture filed to it. Its folder will appear in your Cowork drive on first export.` }),
+  }).catch(() => {});
+
+  await fetch(`${SUPABASE_URL}/functions/v1/dispatch-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
+    body: JSON.stringify({ captureId }),
+  }).catch((e) => console.error("dispatch call failed", e));
+}
+
 async function handleApproval(
   clarificationId: string,
   captureId: string,
@@ -116,6 +173,12 @@ Deno.serve(async (req) => {
       EdgeRuntime.waitUntil(
         handleRouteChoice(meta.clarificationId, meta.captureId, projectId, payload.user?.id ?? "unknown", payload.response_url)
           .catch((e) => console.error("interact failed", e)),
+      );
+    } else if (action?.action_id === "create:project") {
+      const meta = JSON.parse(action.value ?? "{}");
+      EdgeRuntime.waitUntil(
+        handleCreateProject(meta.clarificationId, meta.captureId, meta.name, payload.user?.id ?? "unknown", payload.response_url)
+          .catch((e) => console.error("create failed", e)),
       );
     } else if (action?.action_id === "approve:run" || action?.action_id === "approve:store") {
       const meta = JSON.parse(action.value ?? "{}");

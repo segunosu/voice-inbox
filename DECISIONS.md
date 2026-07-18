@@ -4,6 +4,16 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 ---
 
+## 2026-07-18 (v1.1 same-day) — Answer-back, folder destinations, voice project creation, digest/sweep
+
+16. **Answer-back live** (owner objective: work by voice, not just file by voice): `ask_project_question`/`summarise` intents are ANSWERED in-thread from real context (project capture history, agent jobs, GitHub commits/issues for repo projects) instead of silently filed. Verified live: "What has been done on Voice Inbox today?" received an accurate commit-level summary. Scope limit: answers only from Voice Inbox DB + routed project's GitHub; no external systems yet; outbound messages to third parties deliberately not executed (spec §2.2).
+
+17. **Drive-folder destinations live**: `projects.folder_path` + `folder_exports` queue; local exporter (`services/folder-exporter`, Windows scheduled task every 5 min on the always-on PC, hidden via VBS) writes §12 intake .md files into `<Cowork folder>/.voice-inbox/inbox/YYYY/MM/`; Google Drive for Desktop syncs them. Verified: Piscina Alta intake file written and marked exported. Chosen over Google service-account API to stay within existing credentials (£0, no new cloud grants).
+
+18. **Voice project creation live**: unknown-project clarifications now carry a "➕ Create 'X'" button; tap creates registry entry + alias + folder destination, routes the capture, resumes dispatch. Verified end-to-end with a signed synthetic tap: project created, capture completed, new folder materialised on the Cowork drive with the intake inside (test project archived afterwards). Routing bug fixed in passing: aliases of archived projects no longer capture routes.
+
+19. **Daily digest + retry sweep**: `digest` Edge Function; pg_cron + pg_net schedules (sweep every 15 min resumes retryable failures at the stage their artefacts prove; digest daily 17:00 UTC posts one batched summary). Pipeline secret read from service-role-only `voice_inbox.settings` at run time — never in git. Verified: sweep returns counts; digest posted real numbers to #voice-inbox.
+
 ## 2026-07-18 (late night) — Dispatch stage live; clarification + approval loops verified
 
 15. **dispatch-github deployed**: policy gate (§4.6) → §12 intake renderer → GitHub issue with @claude mention (Claude Code GitHub Action executes; never merges) → Slack notify; `approval_required` projects get in-thread Run/Save buttons; store-only intents and repo-less projects complete as filed. slack-interact extended for approvals; routing hands off to dispatch automatically. All four live captures ran the full state machine to `completed` (store-only outcomes, correct per policy). Clarification button loop verified live: IceFlow capture → buttons → user tap → routed via user_clarification + routing.correction evidence. Unknown-named-project rule added: never confidently file a named-but-unregistered project to the catch-all — ask instead. `claude.yml` workflow added; **remaining for full E2E execution: owner must mint a Claude credential (`claude setup-token`) and add it as the `CLAUDE_CODE_OAUTH_TOKEN` repo secret.** Dispatch uses the voice-inbox fine-grained PAT (verified: can create issues). **DONE (E2E agent run pending credential)**

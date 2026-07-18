@@ -272,7 +272,9 @@ async function run(captureId: string): Promise<void> {
     await transition(db, captureId, "structured", "routing", correlationId);
 
     const projects = (await db.from("projects").select("id, name, slug, description, execution_mode, routing_threshold, ambiguity_margin").eq("status", "active")).data ?? [];
-    const aliases = (await db.from("project_aliases").select("project_id, normalised_alias")).data ?? [];
+    const activeIds = new Set(projects.map((p) => p.id));
+    const aliases = ((await db.from("project_aliases").select("project_id, normalised_alias")).data ?? [])
+      .filter((a) => activeIds.has(a.project_id)); // archived projects must not capture routes
 
     let selected: { id: string; method: string; confidence: number } | null = null;
     let aliasHit = false;
@@ -341,15 +343,21 @@ async function run(captureId: string): Promise<void> {
       // ambiguous → one useful question with buttons (§5.2)
       await transition(db, captureId, "routing", "awaiting_route", correlationId);
       const options = projects.slice(0, 4).map((p) => ({ id: `project:${p.id}`, label: p.name }));
+      // A named-but-unknown project offers creation (owner request: voice project creation).
+      const unknownName = !aliasHit && ref?.raw ? String(ref.raw).replace(/^project\s+/i, "").trim().slice(0, 60) : null;
       const cl = await db.from("clarifications").insert({
         capture_id: captureId, question_type: "routing",
-        question_text: "Where should this go?", options_json: options,
+        question_text: "Where should this go?", options_json: [...options, ...(unknownName ? [{ id: "create", label: `Create '${unknownName}'` }] : [])],
         slack_channel_id: channel, status: "pending",
       }).select("id").single();
       if (cl.error) throw cl.error;
+      const buttons = options.map((o) => ({ type: "button", text: { type: "plain_text", text: o.label }, action_id: o.id, value: JSON.stringify({ clarificationId: cl.data.id, captureId }) }));
+      if (unknownName) {
+        buttons.push({ type: "button", style: "primary", text: { type: "plain_text", text: `➕ Create '${unknownName}'` }, action_id: "create:project", value: JSON.stringify({ clarificationId: cl.data.id, captureId, name: unknownName }) } as never);
+      }
       const blocks = [
-        { type: "section", text: { type: "mrkdwn", text: `❓ *Where should this go?*\n*${intake.title}* — ${intake.conciseSummary}` } },
-        { type: "actions", block_id: `clarification:${cl.data.id}`, elements: options.map((o) => ({ type: "button", text: { type: "plain_text", text: o.label }, action_id: o.id, value: JSON.stringify({ clarificationId: cl.data.id, captureId }) })) },
+        { type: "section", text: { type: "mrkdwn", text: `❓ *Where should this go?*\n*${intake.title}* — ${intake.conciseSummary}${unknownName ? `\n_You mentioned a project I don't know yet: *${unknownName}*._` : ""}` } },
+        { type: "actions", block_id: `clarification:${cl.data.id}`, elements: buttons },
       ];
       await slackApi("chat.postMessage", BOT_TOKEN, { channel, thread_ts: threadTs, text: "Where should this go?", blocks });
     }
