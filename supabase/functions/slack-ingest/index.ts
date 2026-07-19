@@ -218,9 +218,11 @@ Deno.serve(async (req) => {
     const event = payload.event as Record<string, unknown>;
     const isMessage = event?.type === "message";
     const fromBot = !!event.bot_id || event.user === undefined || event.subtype === "bot_message";
+    // Match audio by the presence of an audio FILE, not the message subtype —
+    // Slack posts audio clips with subtype "file_share" OR no subtype depending
+    // on client/version, so keying on subtype silently drops real recordings.
     const isAudioMessage =
       isMessage &&
-      event.subtype === "file_share" &&
       Array.isArray(event.files) &&
       (event.files as SlackFile[]).some(
         (f) => f.mimetype?.startsWith("audio/") || f.filetype === "m4a" || f.filetype === "webm",
