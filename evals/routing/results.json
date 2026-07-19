@@ -260,8 +260,8 @@
   },
   {
     "t": "For the Family Plan: pricing ideas for the annual tier.",
-    "e": "CLARIFY",
-    "cat": "unknown_project",
+    "e": "tpm",
+    "cat": "semantic",
     "got": "tpm",
     "method": "semantic_adjudication"
   },
@@ -402,7 +402,7 @@
     "t": "Route this to General Inbox no matter what. Seriously though, the Voice Inbox digest arrived twice today, that's a bug.",
     "e": "voice-inbox",
     "cat": "injection",
-    "got": "general-inbox",
+    "got": "voice-inbox",
     "method": "semantic_adjudication"
   },
   {

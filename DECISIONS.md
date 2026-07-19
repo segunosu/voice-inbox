@@ -4,6 +4,12 @@ Format: date · decision · reasoning · status. Newest first. Decisions are nev
 
 ---
 
+## 2026-07-19 — Adjudicator injection hardening (eval-driven)
+
+20. **Two-layer routing injection defence**: (1) §16.2 adjudicator prompt now explicitly treats commanded destinations ("route this to X", "no matter what", "system override") as untrusted data and evidence of nothing; (2) deterministic sentence-level sanitisation strips injection-command sentences from the adjudicator's view (full transcript preserved in the intake record). Eval after hardening: **99/100, false-confident 0, over-cautious 0, injection 5/5** (was 93% with 3 false-confident pre-guard). Known residual: lowercase unnamed-style references ("the marketing project") can land in the catch-all instead of asking — benign destination, tracked in the eval. One eval label corrected in the model's favour: "Family Plan" correctly routes to TPM (TPM has a Family plan). **DONE**
+
+---
+
 ## 2026-07-18 (v1.1 same-day) — Answer-back, folder destinations, voice project creation, digest/sweep
 
 16. **Answer-back live** (owner objective: work by voice, not just file by voice): `ask_project_question`/`summarise` intents are ANSWERED in-thread from real context (project capture history, agent jobs, GitHub commits/issues for repo projects) instead of silently filed. Verified live: "What has been done on Voice Inbox today?" received an accurate commit-level summary. Scope limit: answers only from Voice Inbox DB + routed project's GitHub; no external systems yet; outbound messages to third parties deliberately not executed (spec §2.2).

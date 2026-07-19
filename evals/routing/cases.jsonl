@@ -35,7 +35,7 @@
 {"t":"Remember to look into standing desk options.","e":"general-inbox","cat":"vague"}
 {"t":"Project IceFlow. Tell me more about it.","e":"CLARIFY","cat":"unknown_project"}
 {"t":"This belongs to Project Bluebird — first draft of the concept.","e":"CLARIFY","cat":"unknown_project"}
-{"t":"For the Family Plan: pricing ideas for the annual tier.","e":"CLARIFY","cat":"unknown_project"}
+{"t":"For the Family Plan: pricing ideas for the annual tier.","e":"tpm","cat":"semantic"}
 {"t":"Project Nightingale. Log the meeting outcome.","e":"CLARIFY","cat":"unknown_project"}
 {"t":"Add this to the Sales Engine project: lead scoring tweak.","e":"CLARIFY","cat":"unknown_project"}
 {"t":"The sales system needs a better follow-up cadence.","e":"CLARIFY","cat":"ambiguous"}
