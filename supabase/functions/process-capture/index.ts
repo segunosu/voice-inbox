@@ -237,6 +237,35 @@ async function run(captureId: string): Promise<void> {
       transcript = t.data;
     }
 
+    // Session resume: a voice reply in a thread whose parent session asked a
+    // question goes straight back to that session — no structuring, no routing.
+    if (capture.reply_to_capture_id) {
+      const parentJob = await db
+        .from("agent_jobs")
+        .select("id, project_id, session_identifier, policy_snapshot_json")
+        .eq("capture_id", capture.reply_to_capture_id)
+        .eq("status", "needs_attention")
+        .not("session_identifier", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (parentJob.data) {
+        const st = (await db.from("captures").select("status").eq("id", captureId).single()).data!.status;
+        if (st !== "transcribed") return;
+        await db.from("captures").update({ status: "agent_queued", selected_project_id: (await db.from("captures").select("selected_project_id").eq("id", capture.reply_to_capture_id).single()).data?.selected_project_id ?? null, route_method: "thread_reply" }).eq("id", captureId);
+        const rj = await db.from("agent_jobs").insert({
+          capture_id: captureId, project_id: parentJob.data.project_id, status: "queued",
+          requested_mode: "docs_auto", intake_relative_path: ".voice-inbox/inbox",
+          session_identifier: parentJob.data.session_identifier,
+          policy_snapshot_json: { kind: "local_session_resume", folder_path: parentJob.data.policy_snapshot_json?.folder_path, answerText: transcript.raw_text },
+        }).select("id").single();
+        if (rj.error) throw rj.error;
+        await db.from("agent_jobs").update({ status: "answered" }).eq("id", parentJob.data.id);
+        await postThreadReply(BOT_TOKEN, channel, threadTs, "▶️ Got it — resuming the paused session with your answer.");
+        return;
+      }
+    }
+
     // Stage 2: structure
     let intake: Record<string, unknown> | null = null;
     let intakeId: string | null = null;
@@ -279,6 +308,13 @@ async function run(captureId: string): Promise<void> {
     let selected: { id: string; method: string; confidence: number } | null = null;
     let aliasHit = false;
 
+    // Injection guard (§19.3, eval-discovered): transcripts that try to command
+    // the router never get the alias fast-path — the adjudicator (which treats
+    // names-in-instructions as data) decides instead.
+    const injectionSuspect =
+      /(ignore\s+(your|all|previous|prior).{0,30}instructions|route\s+this\s+to|system\s+override|confidence\s*[01][.,]\d|no\s+matter\s+what|as\s+the\s+administrator)/i
+        .test(String(intake.cleanTranscript));
+
     // Stage A: explicit reference — also scan title/summary/entities, since the
     // structurer sometimes under-extracts phrases like "this is for TPM".
     const ref = intake.explicitProjectReference as { normalised?: string } | null;
@@ -286,7 +322,7 @@ async function run(captureId: string): Promise<void> {
       [ref?.normalised ?? "", intake.title, intake.conciseSummary,
        ...(intake.entities as { name: string }[]).map((e) => e.name)].join(" "),
     );
-    if (ref?.normalised) {
+    if (ref?.normalised && !injectionSuspect) {
       const n = normalise(ref.normalised);
       const hits = new Set(aliases.filter((a) => a.normalised_alias === n).map((a) => a.project_id));
       if (hits.size === 1) {
@@ -294,7 +330,7 @@ async function run(captureId: string): Promise<void> {
         aliasHit = true;
       }
     }
-    if (!selected) {
+    if (!selected && !injectionSuspect) {
       const hits = new Set(aliases.filter((a) => scanText.includes(` ${a.normalised_alias} `) || scanText.startsWith(`${a.normalised_alias} `) || scanText.endsWith(` ${a.normalised_alias}`) || scanText === a.normalised_alias).map((a) => a.project_id));
       if (hits.size === 1) {
         selected = { id: [...hits][0], method: "explicit_alias", confidence: 0.95 };

@@ -120,6 +120,74 @@ async function handleCreateProject(
   }).catch((e) => console.error("dispatch call failed", e));
 }
 
+const BOT_TOKEN = Deno.env.get("SLACK_BOT_TOKEN") ?? "";
+
+/** Outbound send approval: nothing leaves without this tap (§2.2 policy). */
+async function handleOutbound(
+  clarificationId: string,
+  captureId: string,
+  decision: "go" | "no",
+  slackUserId: string,
+  responseUrl: string,
+): Promise<void> {
+  const cl = await db
+    .from("clarifications")
+    .update({ status: "answered", responded_at: new Date().toISOString(), response_json: { decision, slackUserId } })
+    .eq("id", clarificationId)
+    .eq("status", "pending")
+    .select("options_json");
+  if (cl.error) throw cl.error;
+  if ((cl.data?.length ?? 0) === 0) return;
+  const { recipientName, draft } = cl.data[0].options_json as { recipientName: string; draft: string };
+
+  const respond = (text: string) =>
+    fetch(responseUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ replace_original: true, text }) }).catch(() => {});
+
+  if (decision === "no") {
+    await respond(`🚫 Not sent. The draft for *${recipientName}* was discarded.`);
+    return;
+  }
+
+  // resolve recipient among workspace members (exact-ish name match, fail closed)
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  const target = norm(recipientName);
+  const members: { id: string; name?: string; deleted?: boolean; is_bot?: boolean; profile?: { real_name?: string; display_name?: string } }[] = [];
+  let cursor = "";
+  do {
+    const res = await fetch(`https://slack.com/api/users.list?limit=200${cursor ? `&cursor=${cursor}` : ""}`, { headers: { Authorization: `Bearer ${BOT_TOKEN}` } });
+    const json = await res.json();
+    if (!json.ok) throw new Error(`users.list failed: ${json.error}`);
+    members.push(...json.members);
+    cursor = json.response_metadata?.next_cursor ?? "";
+  } while (cursor);
+  const hits = members.filter((m) => !m.deleted && !m.is_bot && [m.profile?.real_name, m.profile?.display_name, m.name]
+    .some((n) => n && (norm(n) === target || norm(n).startsWith(target + " ") || norm(n).split(" ").includes(target))));
+
+  if (hits.length !== 1) {
+    await respond(`⚠️ Couldn't ${hits.length === 0 ? "find" : "uniquely identify"} *${recipientName}* in the workspace (${hits.length} matches) — nothing sent. Forward the draft manually:\n> ${draft}`);
+    return;
+  }
+
+  const open = await (await fetch("https://slack.com/api/conversations.open", {
+    method: "POST", headers: { Authorization: `Bearer ${BOT_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ users: hits[0].id }),
+  })).json();
+  if (!open.ok) throw new Error(`conversations.open failed: ${open.error}`);
+  const send = await (await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST", headers: { Authorization: `Bearer ${BOT_TOKEN}`, "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ channel: open.channel.id, text: `${draft}\n\n_— sent via Voice Inbox on behalf of <@${slackUserId}>_` }),
+  })).json();
+  if (!send.ok) throw new Error(`send failed: ${send.error}`);
+
+  await db.from("audit_events").insert({
+    aggregate_type: "capture", aggregate_id: captureId,
+    event_type: "outbound.sent", actor_type: "slack_user", actor_id: slackUserId,
+    correlation_id: crypto.randomUUID(),
+    payload_json: { recipientSlackId: hits[0].id, recipientName, clarificationId },
+  });
+  await respond(`✅ Sent to *${hits[0].profile?.real_name ?? recipientName}*.`);
+}
+
 async function handleApproval(
   clarificationId: string,
   captureId: string,
@@ -179,6 +247,12 @@ Deno.serve(async (req) => {
       EdgeRuntime.waitUntil(
         handleCreateProject(meta.clarificationId, meta.captureId, meta.name, payload.user?.id ?? "unknown", payload.response_url)
           .catch((e) => console.error("create failed", e)),
+      );
+    } else if (action?.action_id === "send:go" || action?.action_id === "send:no") {
+      const meta = JSON.parse(action.value ?? "{}");
+      EdgeRuntime.waitUntil(
+        handleOutbound(meta.clarificationId, meta.captureId, action.action_id === "send:go" ? "go" : "no", payload.user?.id ?? "unknown", payload.response_url)
+          .catch((e) => console.error("outbound failed", e)),
       );
     } else if (action?.action_id === "approve:run" || action?.action_id === "approve:store") {
       const meta = JSON.parse(action.value ?? "{}");

@@ -55,6 +55,14 @@ async function processAudioMessage(event: Record<string, unknown>): Promise<void
   );
   if (!audio || !channel || !ts || !slackUserId) return;
 
+  // Thread voice replies link to the capture they answer (session resume).
+  let replyTo: string | null = null;
+  const threadTs = event.thread_ts as string | undefined;
+  if (threadTs && threadTs !== ts) {
+    const parent = await db.from("captures").select("id").eq("slack_channel_id", channel).eq("slack_message_ts", threadTs).maybeSingle();
+    replyTo = parent.data?.id ?? null;
+  }
+
   // Idempotency gate first (§20.1): captures are unique on (channel, ts).
   const existing = await db
     .from("captures")
@@ -111,6 +119,7 @@ async function processAudioMessage(event: Record<string, unknown>): Promise<void
     p_recorded_at: recordedAt.toISOString(),
     p_slack_native_transcript: nativeTranscript,
     p_slack_user_id: slackUserId,
+    p_reply_to: replyTo,
   });
   if (rpc.error) throw rpc.error;
 
