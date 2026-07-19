@@ -31,3 +31,6 @@ desktop.ini
 .idea/
 .vscode/
 *.log
+
+# Sandbox test artifacts (never real data)
+.sandbox/

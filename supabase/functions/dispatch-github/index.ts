@@ -222,6 +222,53 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
   const intake = intakeRow.content_json as Intake;
 
   const md = renderIntake(capture, intake, proj.name);
+  const isDashboard = proj.slug === "goals-projects-work-dashboard";
+
+  // Life-OS feed (owner design): tasks/reminders/goals from any project append
+  // to the central INBOX.md the morning brief grooms. The local exporter does
+  // the physical write; here we queue formatted lines (idempotent) + confirm.
+  async function feedLifeOs(): Promise<void> {
+    const existing = await db.from("lifeos_queue").select("id").eq("capture_id", captureId).maybeSingle();
+    if (existing.data) return;
+    const d = new Date(capture.recorded_at as string);
+    const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    const src = proj.name;
+    const lines: string[] = [];
+    const actions = (intake.actions ?? []).filter((a) => a.suggestedOwner !== "coding_agent");
+    for (const a of actions.slice(0, 5)) {
+      const when = (a as { dueDate?: string | null }).dueDate ?? "";
+      lines.push(`- [ ] ${a.text} — ${src} — ${when} — added by Voice Inbox / ${date}`);
+    }
+    // Dashboard-routed notes with no explicit task still land as a goal/idea line.
+    if (lines.length === 0 && (isDashboard || intake.intent === "create_tasks")) {
+      lines.push(`- [ ] ${intake.title}${intake.conciseSummary ? `: ${intake.conciseSummary}` : ""} — ${src} — — added by Voice Inbox / ${date}`);
+    }
+    if (lines.length === 0) return;
+    await db.from("lifeos_queue").insert(lines.map((line) => ({ capture_id: captureId, line })));
+    await postThreadReply(BOT_TOKEN, channel, threadTs,
+      `✍️ Added to your *Life-OS inbox* (your morning brief will groom it into TASKS):\n${lines.map((l) => "> " + l.replace(/^- \[ \] /, "")).join("\n")}`);
+  }
+  try { await feedLifeOs(); } catch (e) { console.error("lifeos feed failed (non-fatal)", e); }
+
+  // Plan readback (owner design 3b): a plan/schedule question on the dashboard
+  // returns the latest brief the owner's scheduled task saved (synced up by the
+  // exporter), posted in Slack as a copy to read.
+  if (isDashboard && ANSWER_INTENTS.has(intake.intent) && !forceStore &&
+      /\b(plan|schedule|today|this week|agenda|priorities|what.s on|morning)\b/i.test(String(intake.cleanTranscript))) {
+    const st0 = (await db.from("captures").select("status").eq("id", captureId).single()).data!.status;
+    if (st0 !== "routed") return;
+    await transition(db, captureId, "routed", "preparing_intake", correlationId);
+    const snap = (await db.from("settings").select("value").eq("key", "lifeos_latest_plan").maybeSingle()).data?.value;
+    await transition(db, captureId, "preparing_intake", "intake_ready", correlationId);
+    await transition(db, captureId, "intake_ready", "completed", correlationId, { outcome: "plan_readback" });
+    if (snap) {
+      await postThreadReply(BOT_TOKEN, channel, threadTs, `🗓️ *Your latest plan:*\n${snap.slice(0, 3500)}`);
+    } else {
+      await postThreadReply(BOT_TOKEN, channel, threadTs,
+        `🗓️ I don't have a saved plan yet. Add *"save the finished plan to LATEST_PLAN.md"* to your Daily morning plan brief, and I'll read it back here whenever you ask.`);
+    }
+    return;
+  }
 
   // Folder destination (owner request): queue the intake .md for the local
   // exporter, which writes it into the Drive-synced Cowork project folder.

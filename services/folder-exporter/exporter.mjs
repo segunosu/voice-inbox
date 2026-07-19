@@ -8,7 +8,7 @@
  * No dependencies — Node 20+ built-ins only.
  */
 
-import { readFileSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const ENV_PATH = "C:/Users/Oem/.secrets/voice-inbox.env";
@@ -42,7 +42,6 @@ const headers = {
 const res = await fetch(`${BASE}/rest/v1/folder_exports?status=eq.pending&select=id,folder_path,filename,markdown,created_at&limit=25`, { headers });
 if (!res.ok) { log(`fetch pending failed: HTTP ${res.status} ${await res.text()}`); process.exit(1); }
 const pending = await res.json();
-if (pending.length === 0) { process.exit(0); }
 
 for (const row of pending) {
   try {
@@ -63,5 +62,56 @@ for (const row of pending) {
       method: "PATCH", headers,
       body: JSON.stringify({ status: "failed", error: String(e).slice(0, 500) }),
     }).catch(() => {});
+  }
+}
+
+// ---------- Life-OS bridge ----------
+async function setting(key) {
+  const r = await fetch(`${BASE}/rest/v1/settings?key=eq.${key}&select=value`, { headers });
+  const j = r.ok ? await r.json() : [];
+  return j[0]?.value ?? null;
+}
+
+const lifeosFolderCfg = await setting("lifeos_folder");
+if (lifeosFolderCfg) {
+  // 'SANDBOX' writes to a test copy in the repo; otherwise a path under COWORK_ROOT.
+  const lifeosDir = lifeosFolderCfg === "SANDBOX"
+    ? join(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..", ".sandbox", "LIFE OS")
+    : join(ROOT, lifeosFolderCfg);
+  mkdirSync(lifeosDir, { recursive: true });
+  const inboxPath = join(lifeosDir, "INBOX.md");
+
+  // 1) Append queued voice items to INBOX.md (append-only).
+  const q = await fetch(`${BASE}/rest/v1/lifeos_queue?status=eq.pending&select=id,line&order=created_at&limit=50`, { headers });
+  const items = q.ok ? await q.json() : [];
+  if (items.length > 0) {
+    if (!existsSync(inboxPath)) {
+      writeFileSync(inboxPath,
+        "# INBOX.md — Voice Inbox → Life OS\n\n" +
+        "*Items captured by voice via Voice Inbox (Slack). The daily/weekly briefs read and groom these into TASKS.md / OBJECTIVES.md, then clear them. Append-only from Voice Inbox.*\n\n" +
+        "Format: `- [ ] task — project — when — added by Voice Inbox / date`\n\n## Captured (ungroomed)\n", "utf8");
+    }
+    for (const it of items) {
+      try {
+        appendFileSync(inboxPath, it.line.endsWith("\n") ? it.line : it.line + "\n", "utf8");
+        await fetch(`${BASE}/rest/v1/lifeos_queue?id=eq.${it.id}`, { method: "PATCH", headers,
+          body: JSON.stringify({ status: "appended", appended_at: new Date().toISOString() }) });
+        log(`lifeos append: ${it.line.slice(0, 80)}`);
+      } catch (e) {
+        await fetch(`${BASE}/rest/v1/lifeos_queue?id=eq.${it.id}`, { method: "PATCH", headers,
+          body: JSON.stringify({ status: "failed", error: String(e).slice(0, 300) }) }).catch(() => {});
+        log(`lifeos append FAILED ${it.id}: ${e}`);
+      }
+    }
+  }
+
+  // 2) Sync the latest saved plan up so answer-back can read it in Slack.
+  const planPath = join(lifeosDir, "LATEST_PLAN.md");
+  if (existsSync(planPath)) {
+    const content = readFileSync(planPath, "utf8").slice(0, 8000);
+    await fetch(`${BASE}/rest/v1/settings?on_conflict=key`, {
+      method: "POST", headers: { ...headers, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ key: "lifeos_latest_plan", value: content, updated_at: new Date().toISOString() }),
+    }).catch((e) => log(`plan sync failed: ${e}`));
   }
 }
