@@ -201,6 +201,23 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
   const threadTs = capture.slack_message_ts as string;
 
   const proj = (await db.from("projects").select("*").eq("id", capture.selected_project_id).single()).data!;
+
+  // Provenance guard (incident remedy, 2026-07-19): a capture with no
+  // verified recording behind it must never write to, or notify about, a
+  // real project — only the sandbox may be used for that. Reprocessing
+  // reuses the original audio_object_key, so genuine retries are unaffected.
+  if (!capture.audio_object_key && !proj.is_sandbox) {
+    await db.from("audit_events").insert({
+      aggregate_type: "capture", aggregate_id: captureId,
+      event_type: "capture.blocked_no_provenance", actor_type: "system",
+      correlation_id: correlationId,
+      payload_json: { projectId: proj.id, reason: "no audio_object_key and target project is not the sandbox" },
+    });
+    await postThreadReply(BOT_TOKEN, channel, threadTs,
+      `🚫 Blocked: this capture has no verified recording behind it, so nothing was written to *${proj.name}* or sent on your behalf.`);
+    return;
+  }
+
   const intakeRow = (await db.from("structured_intakes").select("id, content_json").eq("capture_id", captureId).order("created_at", { ascending: false }).limit(1).single()).data!;
   const intake = intakeRow.content_json as Intake;
 

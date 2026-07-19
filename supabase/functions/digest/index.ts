@@ -57,6 +57,7 @@ async function digest(): Promise<void> {
   const projects = (await db.from("projects").select("id, name")).data ?? [];
   const pname = (id: string | null) => projects.find((p) => p.id === id)?.name ?? "—";
   const pending = (await db.from("clarifications").select("id").eq("status", "pending")).data ?? [];
+  const blocked = (await db.from("audit_events").select("id").eq("event_type", "capture.blocked_no_provenance").gte("created_at", since)).data ?? [];
   const exportsDone = (await db.from("folder_exports").select("id").eq("status", "exported").gte("created_at", since)).data ?? [];
   const jobs = (await db.from("agent_jobs").select("status, github_issue_url").gte("created_at", since)).data ?? [];
 
@@ -68,6 +69,7 @@ async function digest(): Promise<void> {
     `📄 ${exportsDone.length} intake file${exportsDone.length === 1 ? "" : "s"} written to project folders`,
     `🤖 ${jobs.length} agent job${jobs.length === 1 ? "" : "s"}${jobs.length ? " — " + jobs.map((j) => j.github_issue_url ?? j.status).join(", ") : ""}`,
     pending.length ? `⏳ *${pending.length} question${pending.length === 1 ? "" : "s"} waiting for you*` : "✅ Nothing waiting on you.",
+    ...(blocked.length ? [`🚫 *${blocked.length} unverified action${blocked.length === 1 ? "" : "s"} blocked* (no real recording behind it) — worth checking who/what triggered these`] : []),
   ];
   await slackApi("chat.postMessage", BOT_TOKEN, { channel, text: lines.join("\n") });
 }

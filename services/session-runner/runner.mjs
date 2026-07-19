@@ -71,10 +71,28 @@ try {
   const leased = lease.ok ? await lease.json() : [];
   if (leased.length === 0) { rmSync(LOCK, { force: true }); process.exit(0); }
 
-  const cap = await (await fetch(`${BASE}/rest/v1/captures?id=eq.${job.capture_id}&select=slack_channel_id,slack_message_ts,title`, { headers })).json();
+  const cap = await (await fetch(`${BASE}/rest/v1/captures?id=eq.${job.capture_id}&select=slack_channel_id,slack_message_ts,title,audio_object_key`, { headers })).json();
   const capture = cap[0];
-  const proj = (await (await fetch(`${BASE}/rest/v1/projects?id=eq.${job.project_id}&select=name,folder_path,execution_mode`, { headers })).json())[0];
-  const cwd = join(ROOT, proj.folder_path);
+  const proj = (await (await fetch(`${BASE}/rest/v1/projects?id=eq.${job.project_id}&select=name,folder_path,execution_mode,is_sandbox`, { headers })).json())[0];
+
+  // Provenance guard (incident remedy, 2026-07-19): defense-in-depth twin of
+  // the dispatch-github check — refuse to run against a real project unless
+  // this job traces back to a capture with a verified recording.
+  if (!capture.audio_object_key && !proj.is_sandbox) {
+    log(`BLOCKED job ${job.id}: no audio provenance and target "${proj.name}" is not the sandbox`);
+    await fetch(`${BASE}/rest/v1/agent_jobs?id=eq.${job.id}`, {
+      method: "PATCH", headers,
+      body: JSON.stringify({ status: "failed", result_summary: "blocked: no audio provenance, non-sandbox project", completed_at: new Date().toISOString() }),
+    });
+    await slackReply(capture.slack_channel_id, capture.slack_message_ts,
+      `🚫 Blocked: this job has no verified recording behind it — nothing was run against *${proj.name}*.`);
+    rmSync(LOCK, { force: true });
+    process.exit(0);
+  }
+
+  const cwd = proj.is_sandbox
+    ? join(HERE, "..", "..", ".sandbox", proj.folder_path || "output")
+    : join(ROOT, proj.folder_path);
   mkdirSync(cwd, { recursive: true });
 
   const isResume = job.policy_snapshot_json?.kind === "local_session_resume";
