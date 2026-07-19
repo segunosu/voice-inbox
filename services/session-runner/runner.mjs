@@ -71,15 +71,15 @@ try {
   const leased = lease.ok ? await lease.json() : [];
   if (leased.length === 0) { rmSync(LOCK, { force: true }); process.exit(0); }
 
-  const cap = await (await fetch(`${BASE}/rest/v1/captures?id=eq.${job.capture_id}&select=slack_channel_id,slack_message_ts,title,audio_object_key`, { headers })).json();
+  const cap = await (await fetch(`${BASE}/rest/v1/captures?id=eq.${job.capture_id}&select=slack_channel_id,slack_message_ts,title,source_verified`, { headers })).json();
   const capture = cap[0];
-  const proj = (await (await fetch(`${BASE}/rest/v1/projects?id=eq.${job.project_id}&select=name,folder_path,execution_mode,is_sandbox`, { headers })).json())[0];
+  const proj = (await (await fetch(`${BASE}/rest/v1/projects?id=eq.${job.project_id}&select=id,name,folder_path,execution_mode,is_sandbox,session_identifier`, { headers })).json())[0];
 
   // Provenance guard (incident remedy, 2026-07-19): defense-in-depth twin of
   // the dispatch-github check — refuse to run against a real project unless
-  // this job traces back to a capture with a verified recording.
-  if (!capture.audio_object_key && !proj.is_sandbox) {
-    log(`BLOCKED job ${job.id}: no audio provenance and target "${proj.name}" is not the sandbox`);
+  // this job traces back to a genuinely ingested capture.
+  if (!capture.source_verified && !proj.is_sandbox) {
+    log(`BLOCKED job ${job.id}: capture not source_verified and target "${proj.name}" is not the sandbox`);
     await fetch(`${BASE}/rest/v1/agent_jobs?id=eq.${job.id}`, {
       method: "PATCH", headers,
       body: JSON.stringify({ status: "failed", result_summary: "blocked: no audio provenance, non-sandbox project", completed_at: new Date().toISOString() }),
@@ -117,13 +117,22 @@ Rules:
 INTAKE:
 ${intakeMd}`;
 
-  log(`running job ${job.id} (${isResume ? "resume" : "fresh"}) for ${proj.name}`);
+  // Per-project persistent session: every capture routed to a project flows
+  // into ONE continuing Claude session (stable id stored on the project), so
+  // the project has a single accumulating "chat session" — resumable on the PC
+  // with `claude --resume <id>`. Resume jobs prefer the job's own paused id.
+  const projectSessionId = proj.session_identifier || null;
+  let sessionId = isResume ? (job.session_identifier || projectSessionId) : projectSessionId;
+  const startNew = !sessionId;
+  if (startNew) sessionId = crypto.randomUUID();
+
+  log(`running job ${job.id} (${isResume ? "resume" : "fresh"}, session ${startNew ? "new" : "continue"} ${sessionId}) for ${proj.name}`);
   let output = "";
-  let sessionId = job.session_identifier ?? null;
   let failed = false;
   try {
     const args = ["-p", "--output-format", "json", "--permission-mode", "acceptEdits"];
-    if (isResume && sessionId) args.unshift("--resume", sessionId);
+    if (startNew) args.unshift("--session-id", sessionId);
+    else args.unshift("--resume", sessionId);
     const raw = execFileSync(CLAUDE, args, {
       cwd, input: isResume ? resumePrompt : wrapper, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 10 * 1024 * 1024,
       windowsHide: true,
@@ -137,6 +146,13 @@ ${intakeMd}`;
   } catch (e) {
     failed = true;
     output = String(e.stdout ?? "") + "\n" + String(e.stderr ?? e);
+  }
+
+  // Persist the project's session id so future captures continue it.
+  if (!proj.session_identifier && sessionId) {
+    await fetch(`${BASE}/rest/v1/projects?id=eq.${proj.id}`, {
+      method: "PATCH", headers, body: JSON.stringify({ session_identifier: sessionId }),
+    }).catch((e) => log(`project session persist failed: ${e}`));
   }
 
   const report = output.includes("REPORT:") ? output.slice(output.indexOf("REPORT:")).trim() : output.trim();

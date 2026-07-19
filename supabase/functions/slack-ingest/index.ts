@@ -144,6 +144,51 @@ async function processAudioMessage(event: Record<string, unknown>): Promise<void
   }
 }
 
+async function processTextMessage(event: Record<string, unknown>, text: string): Promise<void> {
+  const channel = event.channel as string;
+  const ts = (event.ts ?? event.event_ts) as string;
+  const slackUserId = event.user as string;
+  if (!channel || !ts || !slackUserId) return;
+
+  // Same thread-reply resume linkage as audio.
+  let replyTo: string | null = null;
+  const threadTs = event.thread_ts as string | undefined;
+  if (threadTs && threadTs !== ts) {
+    const parent = await db.from("captures").select("id").eq("slack_channel_id", channel).eq("slack_message_ts", threadTs).maybeSingle();
+    replyTo = parent.data?.id ?? null;
+  }
+
+  const existing = await db.from("captures").select("id").eq("slack_channel_id", channel).eq("slack_message_ts", ts).maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data) return;
+
+  const user = await db.from("users").upsert({ slack_user_id: slackUserId }, { onConflict: "slack_user_id" }).select("id").single();
+  if (user.error) throw user.error;
+
+  // Text needs no transcription — the typed text IS the transcript. It goes in
+  // slack_native_transcript; process-capture uses it directly when no audio.
+  const rpc = await db.rpc("create_capture_with_event", {
+    p_user_id: user.data.id, p_channel: channel, p_ts: ts,
+    p_idempotency_key: `slack:${channel}:${ts}`,
+    p_audio_object_key: null, p_audio_sha256: null, p_audio_mime_type: null,
+    p_duration_ms: null, p_recorded_at: new Date(Number(ts.split(".")[0]) * 1000).toISOString(),
+    p_slack_native_transcript: text, p_slack_user_id: slackUserId, p_reply_to: replyTo, p_kind: "text",
+  });
+  if (rpc.error) throw rpc.error;
+
+  if (BOT_TOKEN) {
+    await postThreadReply(BOT_TOKEN, channel, ts, "✍️ Got it — processing your note…").catch((e) => console.error("ack reply failed", e));
+  }
+  const captureId = rpc.data as string;
+  const pipelineSecret = Deno.env.get("PIPELINE_SECRET") ?? "";
+  if (pipelineSecret) {
+    await fetch(`${SUPABASE_URL}/functions/v1/process-capture`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-pipeline-secret": pipelineSecret },
+      body: JSON.stringify({ captureId }),
+    }).catch((e) => console.error("pipeline handoff failed", e));
+  }
+}
+
 Deno.serve(async (req) => {
   const body = await req.text();
 
@@ -171,18 +216,29 @@ Deno.serve(async (req) => {
 
   if (payload.type === "event_callback") {
     const event = payload.event as Record<string, unknown>;
+    const isMessage = event?.type === "message";
+    const fromBot = !!event.bot_id || event.user === undefined || event.subtype === "bot_message";
     const isAudioMessage =
-      event?.type === "message" &&
+      isMessage &&
       event.subtype === "file_share" &&
       Array.isArray(event.files) &&
       (event.files as SlackFile[]).some(
         (f) => f.mimetype?.startsWith("audio/") || f.filetype === "m4a" || f.filetype === "webm",
       );
+    // A genuine typed request: a real user's text message in a monitored
+    // surface, no files, not a system subtype, not our own bot. Thread replies
+    // are handled by the resume path already, so only new top-level messages
+    // become fresh captures here (thread_ts === ts means top-level).
+    const text = typeof event.text === "string" ? event.text.trim() : "";
+    const isTextMessage =
+      isMessage && !fromBot && !isAudioMessage && text.length > 0 &&
+      (event.subtype === undefined || event.subtype === null) &&
+      !Array.isArray(event.files);
+
     if (isAudioMessage) {
-      // ACK within 3s; heavy lifting continues in the background.
-      EdgeRuntime.waitUntil(
-        processAudioMessage(event).catch((e) => console.error("ingest failed", e)),
-      );
+      EdgeRuntime.waitUntil(processAudioMessage(event).catch((e) => console.error("audio ingest failed", e)));
+    } else if (isTextMessage) {
+      EdgeRuntime.waitUntil(processTextMessage(event, text).catch((e) => console.error("text ingest failed", e)));
     }
   }
 

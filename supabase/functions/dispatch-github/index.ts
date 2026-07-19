@@ -206,12 +206,12 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
   // verified recording behind it must never write to, or notify about, a
   // real project — only the sandbox may be used for that. Reprocessing
   // reuses the original audio_object_key, so genuine retries are unaffected.
-  if (!capture.audio_object_key && !proj.is_sandbox) {
+  if (!capture.source_verified && !proj.is_sandbox) {
     await db.from("audit_events").insert({
       aggregate_type: "capture", aggregate_id: captureId,
       event_type: "capture.blocked_no_provenance", actor_type: "system",
       correlation_id: correlationId,
-      payload_json: { projectId: proj.id, reason: "no audio_object_key and target project is not the sandbox" },
+      payload_json: { projectId: proj.id, reason: "capture not source_verified (not from a genuine Slack ingest) and target project is not the sandbox" },
     });
     await postThreadReply(BOT_TOKEN, channel, threadTs,
       `🚫 Blocked: this capture has no verified recording behind it, so nothing was written to *${proj.name}* or sent on your behalf.`);

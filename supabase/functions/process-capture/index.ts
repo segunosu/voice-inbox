@@ -229,17 +229,26 @@ async function run(captureId: string): Promise<void> {
   const threadTs = capture.slack_message_ts as string;
 
   try {
-    // Stage 1: transcribe
+    // Stage 1: transcribe (audio) — or use the typed text directly (text capture).
     let transcript: { id: string; raw_text: string } | null = null;
     if (capture.status === "uploaded") {
       await transition(db, captureId, "uploaded", "transcribing", correlationId);
-      const dl = await db.storage.from(AUDIO_BUCKET).download(capture.audio_object_key);
-      if (dl.error) throw dl.error;
-      const bytes = new Uint8Array(await dl.data.arrayBuffer());
-      const t = await transcribe(bytes, capture.audio_mime_type ?? "audio/mp4");
+      let rawText: string, language: string | null, segments: unknown, model: string;
+      if (capture.audio_object_key) {
+        const dl = await db.storage.from(AUDIO_BUCKET).download(capture.audio_object_key);
+        if (dl.error) throw dl.error;
+        const bytes = new Uint8Array(await dl.data.arrayBuffer());
+        const t = await transcribe(bytes, capture.audio_mime_type ?? "audio/mp4");
+        rawText = t.text; language = t.language; segments = t.raw; model = TRANSCRIPTION_MODEL;
+      } else {
+        // Text capture: the typed message is the transcript. No STT call.
+        rawText = String(capture.slack_native_transcript ?? "");
+        if (!rawText) throw new Error("text capture has no content");
+        language = null; segments = null; model = "text-passthrough";
+      }
       const ins = await db.from("transcripts").insert({
-        capture_id: captureId, provider: "openai", model: TRANSCRIPTION_MODEL,
-        language: t.language, raw_text: t.text, segments_json: t.raw, version: 1,
+        capture_id: captureId, provider: capture.audio_object_key ? "openai" : "slack-text", model,
+        language, raw_text: rawText, segments_json: segments, version: 1,
       }).select("id, raw_text").single();
       if (ins.error) throw ins.error;
       transcript = ins.data;
@@ -404,10 +413,10 @@ async function run(captureId: string): Promise<void> {
       if (cl.error) throw cl.error;
       const buttons = options.map((o) => ({ type: "button", text: { type: "plain_text", text: o.label }, action_id: o.id, value: JSON.stringify({ clarificationId: cl.data.id, captureId }) }));
       if (unknownName) {
-        buttons.push({ type: "button", style: "primary", text: { type: "plain_text", text: `➕ Create '${unknownName}'` }, action_id: "create:project", value: JSON.stringify({ clarificationId: cl.data.id, captureId, name: unknownName }) } as never);
+        buttons.push({ type: "button", style: "primary", text: { type: "plain_text", text: `➕ Add '${unknownName}' to my projects` }, action_id: "create:project", value: JSON.stringify({ clarificationId: cl.data.id, captureId, name: unknownName }) } as never);
       }
       const blocks = [
-        { type: "section", text: { type: "mrkdwn", text: `❓ *Where should this go?*\n*${intake.title}* — ${intake.conciseSummary}${unknownName ? `\n_You mentioned a project I don't know yet: *${unknownName}*._` : ""}` } },
+        { type: "section", text: { type: "mrkdwn", text: `❓ *Where should this go?*\n*${intake.title}* — ${intake.conciseSummary}${unknownName ? `\n_I don't have a project registered as *${unknownName}* yet — tap below to register it (this just adds it to Voice Inbox's list; it doesn't create anything new elsewhere)._` : ""}` } },
         { type: "actions", block_id: `clarification:${cl.data.id}`, elements: buttons },
       ];
       await slackApi("chat.postMessage", BOT_TOKEN, { channel, thread_ts: threadTs, text: "Where should this go?", blocks });
