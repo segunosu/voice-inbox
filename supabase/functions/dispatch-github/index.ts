@@ -337,6 +337,36 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
     }
   }
 
+  // GLOBAL SESSION bus (owner design): substantive instructions are routed and
+  // appended to GLOBAL_SESSION.md for in-session processing by the owner's
+  // Claude Desktop routine (full tool/connector parity). Terminal path — the
+  // Desktop routine + result-readback take over from here.
+  const SESSION_INTENTS = new Set([
+    "request_change", "investigate", "create_document", "update_documentation", "ask_project_question", "summarise",
+  ]);
+  if (SESSION_INTENTS.has(intake.intent) && !forceStore) {
+    const st0 = (await db.from("captures").select("status").eq("id", captureId).single()).data!.status;
+    if (st0 !== "routed") return;
+    const existing = await db.from("global_session_queue").select("id").eq("capture_id", captureId).maybeSingle();
+    if (!existing.data) {
+      const d = new Date(capture.recorded_at as string);
+      const ts = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+      const instruction = `${intake.title}${intake.conciseSummary && intake.conciseSummary !== intake.title ? ` — ${intake.conciseSummary}` : ""}\n\n${intake.cleanTranscript}`;
+      const block =
+        `<!-- item:${captureId} project:${proj.slug} status:new ts:${ts} -->\n` +
+        `### [${ts}] ${proj.name} — status: new\n` +
+        `**Instruction:** ${instruction.replace(/\n/g, "\n> ").replace(/^/, "")}\n` +
+        `<!-- /item:${captureId} -->\n`;
+      await db.from("global_session_queue").insert({ capture_id: captureId, project_slug: proj.slug, project_name: proj.name, block });
+    }
+    await transition(db, captureId, "routed", "preparing_intake", correlationId);
+    await transition(db, captureId, "preparing_intake", "intake_ready", correlationId);
+    await transition(db, captureId, "intake_ready", "completed", correlationId, { outcome: "queued_for_session" });
+    await postThreadReply(BOT_TOKEN, channel, threadTs,
+      `🧠 Queued as an instruction for *${proj.name}* — your Claude session will process it (full tools/connectors) within ~15 min and I'll post the result back here.`);
+    return;
+  }
+
   // Answer-back (owner objective: work by voice, not just file by voice):
   // questions get answered in-thread from what the system actually knows.
   if (ANSWER_INTENTS.has(intake.intent) && !forceStore) {

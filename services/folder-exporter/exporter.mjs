@@ -114,4 +114,57 @@ if (lifeosFolderCfg) {
       body: JSON.stringify({ key: "lifeos_latest_plan", value: content, updated_at: new Date().toISOString() }),
     }).catch((e) => log(`plan sync failed: ${e}`));
   }
+
+  // 3) GLOBAL SESSION bus: append queued instruction blocks to GLOBAL_SESSION.md.
+  const gsPath = join(lifeosDir, "GLOBAL_SESSION.md");
+  const gq = await fetch(`${BASE}/rest/v1/global_session_queue?status=eq.pending&select=id,block&order=created_at&limit=50`, { headers });
+  const gitems = gq.ok ? await gq.json() : [];
+  if (gitems.length > 0) {
+    if (!existsSync(gsPath)) {
+      writeFileSync(gsPath,
+        "# GLOBAL_SESSION.md — Voice Inbox → Claude projects/sessions\n\n" +
+        "*Voice Inbox appends each substantive spoken instruction here (append-only), tagged with its project. A Claude Desktop scheduled task (every 15 min) reads items whose id has no result yet in GLOBAL_SESSION_RESULTS.md, processes each IN the relevant project session with full tools/connectors, and appends a result block there keyed by the same id. Voice Inbox posts those results back to Slack. Do not hand-edit item blocks.*\n\n---\n\n", "utf8");
+    }
+    for (const it of gitems) {
+      try {
+        appendFileSync(gsPath, it.block.endsWith("\n") ? it.block + "\n" : it.block + "\n\n", "utf8");
+        await fetch(`${BASE}/rest/v1/global_session_queue?id=eq.${it.id}`, { method: "PATCH", headers,
+          body: JSON.stringify({ status: "appended", appended_at: new Date().toISOString() }) });
+        log(`global_session append: ${it.id}`);
+      } catch (e) {
+        await fetch(`${BASE}/rest/v1/global_session_queue?id=eq.${it.id}`, { method: "PATCH", headers,
+          body: JSON.stringify({ status: "failed", error: String(e).slice(0, 300) }) }).catch(() => {});
+        log(`global_session append FAILED ${it.id}: ${e}`);
+      }
+    }
+  }
+
+  // 4) Read the Desktop routine's results and post each new one back to Slack.
+  const resPath = join(lifeosDir, "GLOBAL_SESSION_RESULTS.md");
+  if (existsSync(resPath) && env.SLACK_BOT_TOKEN) {
+    const text = readFileSync(resPath, "utf8");
+    const re = /<!--\s*result:([0-9a-fA-F-]{36})\s*-->([\s\S]*?)<!--\s*\/result:\1\s*-->/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const capId = m[1];
+      const inner = m[2].replace(/^\s*#{1,6}.*$/m, "").replace(/\*\*Result:\*\*/i, "").trim();
+      // already posted?
+      const seen = await fetch(`${BASE}/rest/v1/global_session_posted?capture_id=eq.${capId}&select=capture_id`, { headers });
+      if ((seen.ok ? await seen.json() : []).length > 0) continue;
+      const cap = await (await fetch(`${BASE}/rest/v1/captures?id=eq.${capId}&select=slack_channel_id,slack_message_ts,title`, { headers })).json();
+      if (!cap[0]) continue;
+      const post = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST", headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`, "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ channel: cap[0].slack_channel_id, thread_ts: cap[0].slack_message_ts,
+          text: `🧠 *Your Claude session processed:* ${cap[0].title ?? ""}\n${inner.slice(0, 3500)}` }),
+      });
+      const pj = await post.json();
+      if (pj.ok) {
+        await fetch(`${BASE}/rest/v1/global_session_posted`, { method: "POST", headers, body: JSON.stringify({ capture_id: capId }) });
+        log(`global_session result posted for ${capId}`);
+      } else {
+        log(`global_session result post failed for ${capId}: ${pj.error}`);
+      }
+    }
+  }
 }
