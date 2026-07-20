@@ -228,6 +228,10 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
   // to the central INBOX.md the morning brief grooms. The local exporter does
   // the physical write; here we queue formatted lines (idempotent) + confirm.
   async function feedLifeOs(): Promise<void> {
+    // Instructions (processed in-session) are NOT reminders — don't also dump
+    // them into the Life-OS inbox. Only quick tasks/reminders/goals feed it.
+    const SESSION = ["request_change", "investigate", "create_document", "update_documentation", "ask_project_question", "summarise"];
+    if (SESSION.includes(intake.intent)) return;
     const existing = await db.from("lifeos_queue").select("id").eq("capture_id", captureId).maybeSingle();
     if (existing.data) return;
     const d = new Date(capture.recorded_at as string);
@@ -379,7 +383,7 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
     if (job.error) throw job.error;
     await transition(db, captureId, "intake_ready", "agent_queued", correlationId, { agentJobId: job.data.id, kind: "local_session_fast" });
     await postThreadReply(BOT_TOKEN, channel, threadTs,
-      `⚡ On it in *${proj.name}* — I'll post the result here in ~1 minute. (Your Claude Desktop session will also pick it up for the in-session record.)`);
+      `⚡ Working on it in *${proj.name}* — I'll post the result here as soon as it's done (usually 1–2 min; longer for bigger tasks).`);
     return;
   }
 
