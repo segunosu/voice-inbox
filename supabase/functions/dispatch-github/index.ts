@@ -347,23 +347,39 @@ async function run(captureId: string, approved: boolean, forceStore: boolean): P
   if (SESSION_INTENTS.has(intake.intent) && !forceStore) {
     const st0 = (await db.from("captures").select("status").eq("id", captureId).single()).data!.status;
     if (st0 !== "routed") return;
+
+    // Fast path (owner priority: no Slack delay): an on-demand local Claude
+    // session — picked up in seconds by the always-on watch daemon — does the
+    // work + any files in the project's linked folder, and replies in Slack in
+    // ~1 min. Files land in the folder the Desktop project sees.
+    const d = new Date(capture.recorded_at as string);
+    const ts = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+    const instruction = `${intake.title}${intake.conciseSummary && intake.conciseSummary !== intake.title ? ` — ${intake.conciseSummary}` : ""}\n\n${intake.cleanTranscript}`;
+
+    // Desktop chat-session mirror (delay fine): append the instruction to the bus
+    // for the owner's Desktop routine to bring into the actual session chat.
     const existing = await db.from("global_session_queue").select("id").eq("capture_id", captureId).maybeSingle();
     if (!existing.data) {
-      const d = new Date(capture.recorded_at as string);
-      const ts = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-      const instruction = `${intake.title}${intake.conciseSummary && intake.conciseSummary !== intake.title ? ` — ${intake.conciseSummary}` : ""}\n\n${intake.cleanTranscript}`;
       const block =
         `<!-- item:${captureId} project:${proj.slug} status:new ts:${ts} -->\n` +
         `### [${ts}] ${proj.name} — status: new\n` +
-        `**Instruction:** ${instruction.replace(/\n/g, "\n> ").replace(/^/, "")}\n` +
+        `**Instruction:** ${instruction.replace(/\n/g, "\n> ")}\n` +
         `<!-- /item:${captureId} -->\n`;
       await db.from("global_session_queue").insert({ capture_id: captureId, project_slug: proj.slug, project_name: proj.name, block });
     }
+
     await transition(db, captureId, "routed", "preparing_intake", correlationId);
     await transition(db, captureId, "preparing_intake", "intake_ready", correlationId);
-    await transition(db, captureId, "intake_ready", "completed", correlationId, { outcome: "queued_for_session" });
+    const job = await db.from("agent_jobs").insert({
+      capture_id: captureId, project_id: proj.id, status: "queued",
+      requested_mode: proj.execution_mode === "analyse_only" ? "analyse_only" : "docs_auto",
+      intake_relative_path: ".voice-inbox/inbox",
+      policy_snapshot_json: { kind: "local_session", execution_mode: proj.execution_mode, folder_path: proj.folder_path, intakeMd: md },
+    }).select("id").single();
+    if (job.error) throw job.error;
+    await transition(db, captureId, "intake_ready", "agent_queued", correlationId, { agentJobId: job.data.id, kind: "local_session_fast" });
     await postThreadReply(BOT_TOKEN, channel, threadTs,
-      `🧠 Queued as an instruction for *${proj.name}* — your Claude session will process it (full tools/connectors) within ~15 min and I'll post the result back here.`);
+      `⚡ On it in *${proj.name}* — I'll post the result here in ~1 minute. (Your Claude Desktop session will also pick it up for the in-session record.)`);
     return;
   }
 

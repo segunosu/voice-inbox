@@ -90,9 +90,14 @@ try {
     process.exit(0);
   }
 
+  // Working dir: sandbox → repo .sandbox; real project → its linked folder;
+  // folder-less project → a dedicated work folder under the Cowork root.
+  const safeName = (proj.name || "project").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 60);
   const cwd = proj.is_sandbox
     ? join(HERE, "..", "..", ".sandbox", proj.folder_path || "output")
-    : join(ROOT, proj.folder_path);
+    : proj.folder_path
+      ? join(ROOT, proj.folder_path)
+      : join(ROOT, "_VoiceInbox Work", safeName);
   mkdirSync(cwd, { recursive: true });
 
   const isResume = job.policy_snapshot_json?.kind === "local_session_resume";
