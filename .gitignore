@@ -34,3 +34,9 @@ desktop.ini
 
 # Sandbox test artifacts (never real data)
 .sandbox/
+
+# Voice Inbox runner runtime files (heartbeat/lock/logs)
+services/session-runner/watch.alive
+services/session-runner/watch.log
+services/session-runner/runner.log
+services/session-runner/runner.lock

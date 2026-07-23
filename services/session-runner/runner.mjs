@@ -205,6 +205,21 @@ ${intakeMd}`;
     // Slack shows the DELIVERABLE itself, with the file/meta note as a small footer.
     const footer = report ? `\n\n_${report.slice(0, 280)}${proj.folder_path ? ` · saved in ${proj.folder_path}` : ""}_` : "";
     await slackReply(capture.slack_channel_id, capture.slack_message_ts, `✅ *${capture.title}*\n\n${answer.slice(0, 3400)}${footer}`);
+
+    // Desktop continuity (file handoff): drop a CONTINUE_HERE.md into the project
+    // folder so the user can open it in Claude Desktop/Code and pick up exactly
+    // where the Slack prompt left off. Headless sessions can't be injected into a
+    // Desktop chat, so this file IS the bridge. Skip the sandbox. Never fatal.
+    if (!proj.is_sandbox) {
+      try {
+        const stamp = new Date().toISOString().replace("T", " ").slice(0, 16);
+        const header = "# Voice Inbox — continue here\n\n_Latest first. Each entry is a Slack voice prompt processed into this project. To resume any item, open this folder in Claude Desktop or Claude Code and reference it._\n\n";
+        const block = `## ${capture.title} — ${stamp} UTC\n\n**You asked (via Slack voice note):**\n${(intakeMd || "(see the Slack thread)").trim()}\n\n**Answer / result:**\n${(answer || "(none)").trim()}\n\n**Files touched:** ${report.trim() || "(none noted)"}\n\n**To continue on your PC:** say to Claude in this folder — _"Continue '${capture.title}' — see CONTINUE_HERE.md."_\n\n---\n\n`;
+        const hp = join(cwd, "CONTINUE_HERE.md");
+        const prev = existsSync(hp) ? readFileSync(hp, "utf8").replace(header, "").slice(0, 40000) : "";
+        writeFileSync(hp, header + block + prev);
+      } catch (e) { log(`handoff write failed: ${e}`); }
+    }
     log(`job ${job.id} completed`);
   }
 } catch (e) {
